@@ -4,8 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shopify.shopifywebhook.config.ShipitConfig;
 import com.shopify.shopifywebhook.feignclient.ShipitClient;
-import com.shopify.shopifywebhook.feignclient.ShipitRegionsClient;
-import com.shopify.shopifywebhook.feignclient.ShipitSkuClient;
 import com.shopify.shopifywebhook.model.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,15 +27,11 @@ public class ShipmentService {
     @Autowired
     private ShipitClient shipitClient;
 
-    @Autowired
-    private ShipitSkuClient shipitSkuClient;
-
-    @Autowired
-    private ShipitRegionsClient shipitRegionsClient;
-
     private List<Regions> regionsList;
 
     private Regions findedRegion;
+
+    private static String BASE_REFERENCE = "141";
 
     public ShipmentService(ShipitConfig shipitConfig) {
         this.shipitConfig = shipitConfig;
@@ -59,7 +53,10 @@ public class ShipmentService {
 
             shipitOrder.setKind(1);
             shipitOrder.setPlatform(2);//API
-            shipitOrder.setReference("200");//Nro de pedido
+
+            String reference = getReference();
+
+            shipitOrder.setReference(reference);//Nro de pedido
 
             Destiny destiny = new Destiny();
             destiny.setStreet(shipping_address.path("address1").asText()); //TODO separar calle y nro
@@ -166,11 +163,11 @@ public class ShipmentService {
     }
 
     private ResponseEntity<List<Regions>> getRegions() {
-        return shipitRegionsClient.getRegions(shipitConfig.getEmail(), shipitConfig.getAccessToken());
+        return shipitClient.getRegions(shipitConfig.getEmail(), shipitConfig.getAccessToken());
     }
 
     private ResponseEntity<List<Sku>> getAllSku() {
-        return shipitSkuClient.getAllSku(shipitConfig.getEmail(), shipitConfig.getAccessToken());
+        return shipitClient.getAllSku(shipitConfig.getEmail(), shipitConfig.getAccessToken());
     }
 
     private void findNameAndIdRegion(String regionNameFromShopify) {
@@ -185,6 +182,27 @@ public class ShipmentService {
                     }
             );
         }
+    }
+
+    private String getReference() {
+        String reference = "";
+        String auxReference = String.valueOf(Integer.parseInt(BASE_REFERENCE) + 1);
+        BASE_REFERENCE = auxReference;
+        try {
+            Shipment shipment = getShipment(auxReference).getBody();
+            reference = shipment.getShipments().get(0).getReference();
+        if (reference == null || reference.isEmpty()) {
+            return auxReference;
+        }
+        } catch (Exception e){
+            log.error("[getReference] no se encontro reference, se procede a enviar auxiliar: {}", e.getMessage());
+            return auxReference;
+        }
+        return getReference();
+    }
+
+    private ResponseEntity<Shipment> getShipment(String reference){
+        return shipitClient.getShipment(reference, shipitConfig.getEmail(), shipitConfig.getAccessToken());
     }
 }
 

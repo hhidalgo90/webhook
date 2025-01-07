@@ -1,19 +1,47 @@
 package com.shopify.shopifywebhook.feignclient;
 
+import com.shopify.shopifywebhook.model.Regions;
+import com.shopify.shopifywebhook.model.Shipment;
+import com.shopify.shopifywebhook.model.Sku;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @FeignClient(name = "shipitClient", url = "${shipit.api.url}")
 public interface ShipitClient {
 
-    @PostMapping(consumes = "application/json", headers = {
+    @PostMapping(value = "/shipments", consumes = "application/json", headers = {
             "Content-Type=application/json","Accept=application/vnd.shipit.v4"
     })
     ResponseEntity<Void> sendOrder(
             @RequestBody String body,
+            @RequestHeader("X-Shipit-Email") String email,
+            @RequestHeader("X-Shipit-Access-Token") String accessToken
+    );
+
+    @GetMapping(value = "/shipments/reference/{reference}", consumes = "application/json", headers = {
+            "Content-Type=application/json","Accept=application/vnd.shipit.v4"
+    })
+    ResponseEntity<Shipment> getShipment(
+            @PathVariable("reference") String reference,
+            @RequestHeader("X-Shipit-Email") String email,
+            @RequestHeader("X-Shipit-Access-Token") String accessToken
+    );
+
+    @GetMapping(value = "/communes",consumes = "application/json", headers = {
+            "Content-Type=application/json","Accept=application/vnd.shipit.v4"
+    })
+    ResponseEntity<List<Regions>> getRegions(
+            @RequestHeader("X-Shipit-Email") String email,
+            @RequestHeader("X-Shipit-Access-Token") String accessToken
+    );
+
+    @GetMapping(value = "/fulfillment/skus/all", consumes = "application/json", headers = {
+            "Content-Type=application/json","Accept=application/vnd.shipit.v4"
+    })
+    ResponseEntity<List<Sku>> getAllSku(
             @RequestHeader("X-Shipit-Email") String email,
             @RequestHeader("X-Shipit-Access-Token") String accessToken
     );
