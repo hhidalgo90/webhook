@@ -292,7 +292,7 @@ public class ShipmentService {
         quotation.setAlgorithm(1);
         quotation.setAlgorithm_days(3);
         quotation.setType_of_destiny("domicilio");
-        quotation.setOrigin_id(1);//TODO OBTENER COMUNA ORIGEN
+        quotation.setOrigin_id(311);//ID LAMPA
         quotation.setDestiny_id(communeId);
 
         rates.setParcel(quotation);
