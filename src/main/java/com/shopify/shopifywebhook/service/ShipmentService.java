@@ -1,10 +1,12 @@
 package com.shopify.shopifywebhook.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shopify.shopifywebhook.config.ShipitConfig;
 import com.shopify.shopifywebhook.feignclient.ShipitClient;
 import com.shopify.shopifywebhook.model.*;
+import feign.FeignException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -37,13 +39,61 @@ public class ShipmentService {
         this.shipitConfig = shipitConfig;
     }
 
-    public void createShipment(String shopifyOrder) throws Exception {
-        ShipitOrder shipitOrder = createShipitOrder(shopifyOrder);
-        log.info(objectMapper.writeValueAsString(shipitOrder));
-        shipitClient.sendOrder(objectMapper.writeValueAsString(shipitOrder), shipitConfig.getEmail(), shipitConfig.getAccessToken());
+    public void createShipment(Object shopifyOrder) {
+        ShipitOrder shipitOrder = null;
+        try {
+                String jsonString = objectMapper.writeValueAsString(shopifyOrder);
+                shipitOrder = createShipitOrder(jsonString);
+
+                String reference = getLastReference();
+                reference = String.valueOf(Integer.parseInt(reference) + 1);
+                shipitOrder.setReference(reference);//Nro de pedido
+
+            shipitClient.sendOrder(objectMapper.writeValueAsString(shipitOrder), shipitConfig.getEmail(), shipitConfig.getAccessToken());
+        } catch (FeignException e) {
+            log.error(e.getMessage());
+            if(e.status() == 400 && e.getMessage().contains("Envío ya utilizado") ){
+                assert shipitOrder != null;
+                createShipment(shopifyOrder, String.valueOf(Integer.parseInt(shipitOrder.getReference()) + 1));
+            }
+            else {
+                throw new RuntimeException(e);
+            }
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Sobrecarga del metodo createShipment
+     * @param shopifyOrder
+     * @param reference
+     */
+    public void createShipment(Object shopifyOrder, String reference) {
+        ShipitOrder shipitOrder = null;
+        try {
+            String jsonString = objectMapper.writeValueAsString(shopifyOrder);
+            shipitOrder = createShipitOrder(jsonString);
+            shipitOrder.setReference(reference);//Nro de pedido
+
+            shipitClient.sendOrder(objectMapper.writeValueAsString(shipitOrder), shipitConfig.getEmail(), shipitConfig.getAccessToken());
+        } catch (FeignException e) {
+            log.error(e.getMessage());
+            if(e.status() == 400 && e.getMessage().contains("Envío ya utilizado") ){
+                createShipment(shopifyOrder, String.valueOf(Integer.parseInt(shipitOrder.getReference()) + 1));
+            }
+            else {
+                throw new RuntimeException(e);
+            }
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public ShipitOrder createShipitOrder(String jsonString) throws Exception {
+        log.info("[createShipitOrder] Order {}" , jsonString);
         JsonNode rootNode = objectMapper.readTree(jsonString);
         ShipitOrder shipitOrder = new ShipitOrder();
 
@@ -54,22 +104,22 @@ public class ShipmentService {
             shipitOrder.setKind(1);
             shipitOrder.setPlatform(2);//API
 
-            String reference = getReference();
-
-            shipitOrder.setReference(reference);//Nro de pedido
 
             Destiny destiny = new Destiny();
-            destiny.setStreet(shipping_address.path("address1").asText()); //TODO separar calle y nro
-            destiny.setNumber("123");
-            //destiny.setNumber(shipping_address.path("address2").asText());
-            destiny.setComplement(rootNode.path("note").asText());
+            String direccion = shipping_address.path("address1").asText();
+            String calle = direccion.replaceAll("\\d", "").trim();
+            String nroCalle = direccion.replaceAll("\\D", "");
+            destiny.setStreet(calle);
+            destiny.setNumber(nroCalle);
+            destiny.setComplement(shipping_address.path("address2").asText());
 
             log.debug("[ShipmentService] Antes de ir a buscar regiones ");
             this.regionsList = getRegions().getBody();
-            findNameAndIdRegion(shipping_address.path("city").asText());
+            String comunaFromShopify = shipping_address.path("city").asText();
+            findNameAndIdRegion(comunaFromShopify);
 
-            destiny.setCommune_id(findedRegion != null ? findedRegion.getId() : 2);
-            destiny.setCommune_name(findedRegion != null ? findedRegion.getName(): "Quilpue");
+            destiny.setCommune_id(findedRegion != null ? findedRegion.getRegion_id() : 2);
+            destiny.setCommune_name(findedRegion != null ? findedRegion.getRegion_name(): "Quilpue");
             destiny.setFull_name(shipping_address.path("name").asText());
             destiny.setEmail(customer.path("email").asText());
             destiny.setPhone(shipping_address.path("phone").asText());
@@ -88,17 +138,6 @@ public class ShipmentService {
             seller.setSellerName("shopify");
 
             shipitOrder.setSeller(seller);
-
-            Courier courier = new Courier();
-            courier.setId(1); //TODO consumir api couriers
-            courier.setClient("starken"); //TODO consumir api couriers
-            courier.setPayable(false);
-            courier.setSelected(false);
-            courier.setAlgorithm(2); // 2 mas barato a X días
-            courier.setAlgorithmDays(2);
-            courier.setWithoutCourier(false);
-
-            shipitOrder.setCourier(courier);
 
             Insurance insurance = new Insurance();
             insurance.setTicket_number("1232131");//nro boleta
@@ -125,7 +164,7 @@ public class ShipmentService {
 
                         shipitProducts.add(shipitProduct);
 
-                        Sizes sizes = new Sizes(); //TODO ver de donde saco las medidas
+                        Sizes sizes = new Sizes();
                         sizes.setHeight(findedProduct.get().getHeight());
                         sizes.setWeight((float) findedProduct.get().getWeight());
                         sizes.setLength(findedProduct.get().getLength());
@@ -136,9 +175,24 @@ public class ShipmentService {
 
                 shipitOrder.setProducts(shipitProducts);
                 shipitOrder.setItems(shipitProducts.size());
+
+
+                // obtener el courier mas barato
+                ResponseQuotation responseQuotation = getBestPriceForDelivery(shipitOrder.getSizes(), destiny.getCommune_id());
+                Courier courier = new Courier();
+                courier.setId(1); //TODO consumir api couriers
+                courier.setClient(responseQuotation.getLower_price().getCourier().getDisplay_name());
+                courier.setPayable(false);
+                courier.setSelected(false);
+                courier.setAlgorithm(responseQuotation.getAlgorithm()); // 2 mas barato a X días
+                courier.setAlgorithmDays(responseQuotation.getAlgorithm_days());
+                courier.setWithoutCourier(false);
+
+                shipitOrder.setCourier(courier);
             }
         } catch (Exception e) {
             log.error("Ocurrio un error al crear shipitOrder: {}", e.getMessage());
+            throw new RuntimeException(e);
         }
         return shipitOrder;
     }
@@ -184,6 +238,7 @@ public class ShipmentService {
         }
     }
 
+    @Deprecated
     private String getReference() {
         String reference = "";
         String auxReference = String.valueOf(Integer.parseInt(BASE_REFERENCE) + 1);
@@ -201,8 +256,48 @@ public class ShipmentService {
         return getReference();
     }
 
+    @Deprecated
     private ResponseEntity<Shipment> getShipment(String reference){
         return shipitClient.getShipment(reference, shipitConfig.getEmail(), shipitConfig.getAccessToken());
+    }
+
+    private String getLastReference() {
+        return getShipments().getBody().getShipments().stream().findFirst().orElseThrow().getReference();
+    }
+
+    private ResponseEntity<Shipment> getShipments() {
+        ShipmentRequest query = ShipmentRequest.createDefaultQuery();
+        return shipitClient.getShipments(shipitConfig.getEmail(), shipitConfig.getAccessToken(),
+                query.getReference(),
+                query.getPer(),
+                query.getPage(),
+                query.getType(),
+                query.getId(),
+                query.getQuery(),
+                query.getService(),
+                query.getDays(),
+                query.getAnalytics(),
+                query.getFilters().toString(), // Convert Map to JSON string if needed
+                query.getState(),
+                query.getShipment());
+    }
+
+    private ResponseQuotation getBestPriceForDelivery(Sizes sizes, int communeId) throws JsonProcessingException {
+        Rates rates = new Rates();
+        Quotation quotation = new Quotation();
+        quotation.setLength(sizes.getLength());
+        quotation.setHeight(sizes.getHeight());
+        quotation.setWidth(sizes.getWidth());
+        quotation.setWeight(sizes.getWeight());
+        quotation.setAlgorithm(1);
+        quotation.setAlgorithm_days(3);
+        quotation.setType_of_destiny("domicilio");
+        quotation.setOrigin_id(1);//TODO OBTENER COMUNA ORIGEN
+        quotation.setDestiny_id(communeId);
+
+        rates.setParcel(quotation);
+
+        return shipitClient.getRates(objectMapper.writeValueAsString(rates), shipitConfig.getEmail(), shipitConfig.getAccessToken()).getBody();
     }
 }
 
