@@ -20,16 +20,7 @@ public class ShopifyWebhookController {
     @PostMapping("/new-order")
     @ResponseStatus(HttpStatus.OK)
     public void handleNewOrder(@RequestBody Object shopifyOrder) {
-        try {
-            // Convertir el objeto genérico a JSON
-            ObjectMapper objectMapper = new ObjectMapper();
-            String jsonString = objectMapper.writeValueAsString(shopifyOrder);
-
-            shipmentService.createShipment(jsonString);
-        } catch (Exception e) {
-            log.error("[ShopifyWebhookController][handleNewOrder] Error {} " , e.getMessage());
-            throw new HttpClientErrorException(HttpStatus.INTERNAL_SERVER_ERROR);
-        }
+        shipmentService.createShipment(shopifyOrder);
     }
 }
 
